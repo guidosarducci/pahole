@@ -19,7 +19,6 @@
 #include "ctf.h"
 #include "dutil.h"
 #include "gobuffer.h"
-#include "strings.h"
 
 bool ctf__ignore_symtab_function(const GElf_Sym *sym, const char *sym_name)
 {
@@ -285,7 +284,7 @@ int ctf__load_symtab(struct ctf *ctf)
 	return ctf->symtab == NULL ? -1 : 0;
 }
 
-void ctf__set_strings(struct ctf *ctf, struct strings *strings)
+void ctf__set_strings(struct ctf *ctf, struct gobuffer *strings)
 {
 	ctf->strings = strings;
 }
@@ -568,7 +567,7 @@ int ctf__encode(struct ctf *ctf, uint8_t flags)
 	size = (gobuffer__size(&ctf->types) +
 		gobuffer__size(&ctf->objects) +
 		gobuffer__size(&ctf->funcs) +
-		strings__size(ctf->strings));
+		gobuffer__size(ctf->strings));
 
 	ctf->size = sizeof(*hdr) + size;
 	ctf->buf = malloc(ctf->size);
@@ -592,13 +591,13 @@ int ctf__encode(struct ctf *ctf, uint8_t flags)
 	hdr->ctf_type_off = offset;
 	offset += gobuffer__size(&ctf->types);
 	hdr->ctf_str_off  = offset;
-	hdr->ctf_str_len  = strings__size(ctf->strings);
+	hdr->ctf_str_len  = gobuffer__size(ctf->strings);
 
 	void *payload = ctf->buf + sizeof(*hdr);
 	gobuffer__copy(&ctf->objects, payload + hdr->ctf_object_off);
 	gobuffer__copy(&ctf->funcs, payload + hdr->ctf_func_off);
 	gobuffer__copy(&ctf->types, payload + hdr->ctf_type_off);
-	strings__copy(ctf->strings, payload + hdr->ctf_str_off);
+	gobuffer__copy(ctf->strings, payload + hdr->ctf_str_off);
 
 	*(char *)(ctf->buf + sizeof(*hdr) + hdr->ctf_str_off) = '\0';
 	if (flags & CTF_FLAGS_COMPR) {
@@ -621,10 +620,11 @@ int ctf__encode(struct ctf *ctf, uint8_t flags)
 	}
 #if 0
 	printf("\n\ntypes:\n entries: %d\n size: %u"
-		 "\nstrings:\n size: %u\ncompressed size: %d\n",
+		 "\nstrings:\n entries: %u\n size: %u\ncompressed size: %d\n",
 	       ctf->type_index,
 	       gobuffer__size(&ctf->types),
-	       strings__size(ctf->strings), size);
+	       gobuffer__nr_entries(ctf->strings),
+	       gobuffer__size(ctf->strings), size);
 #endif
 	int fd = open(ctf->filename, O_RDWR);
 	if (fd < 0) {

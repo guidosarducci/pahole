@@ -15,41 +15,75 @@
 #include <zlib.h>
 
 #include "dutil.h"
-#include "lib/bpf/src/libbpf.h"
 
 struct strings *strings__new(void)
 {
 	struct strings *strs = malloc(sizeof(*strs));
 
-	if (!strs)
-		return NULL;
-
-	strs->btf = btf__new_empty();
-	if (libbpf_get_error(strs->btf)) {
-		free(strs);
-		return NULL;
+	if (strs != NULL) {
+		strs->tree = NULL;
+		gobuffer__init(&strs->gb);
 	}
 
 	return strs;
+
+}
+
+static void do_nothing(void *ptr __unused)
+{
 }
 
 void strings__delete(struct strings *strs)
 {
 	if (strs == NULL)
 		return;
-	btf__free(strs->btf);
+	tdestroy(strs->tree, do_nothing);
+	__gobuffer__delete(&strs->gb);
 	free(strs);
+}
+
+static strings_t strings__insert(struct strings *strs, const char *s)
+{
+	return gobuffer__add(&strs->gb, s, strlen(s) + 1);
+}
+
+struct search_key {
+	struct strings *strs;
+	const char *str;
+};
+
+static int strings__compare(const void *a, const void *b)
+{
+	const struct search_key *key = a;
+
+	return strcmp(key->str, key->strs->gb.entries + (unsigned long)b);
 }
 
 strings_t strings__add(struct strings *strs, const char *str)
 {
+	unsigned long *s;
 	strings_t index;
+	struct search_key key = {
+		.strs = strs,
+		.str = str,
+	};
 
 	if (str == NULL)
 		return 0;
 
-	index = btf__add_str(strs->btf, str);
-	if (index < 0)
+	s = tsearch(&key, &strs->tree, strings__compare);
+	if (s != NULL) {
+		if (*(struct search_key **)s == (void *)&key) { /* Not found, replace with the right key */
+			index = strings__insert(strs, str);
+			if (index != 0)
+				*s = (unsigned long)index;
+			else {
+				tdelete(&key, &strs->tree, strings__compare);
+				return 0;
+			}
+		} else /* Found! */
+			index = *s;
+	} else
 		return 0;
 
 	return index;
@@ -57,32 +91,21 @@ strings_t strings__add(struct strings *strs, const char *str)
 
 strings_t strings__find(struct strings *strs, const char *str)
 {
-	return btf__find_str(strs->btf, str);
+	strings_t *s;
+	struct search_key key = {
+		.strs = strs,
+		.str = str,
+	};
+
+	if (str == NULL)
+		return 0;
+
+	s = tfind(&key, &strs->tree, strings__compare);
+	return s ? *s : 0;
 }
 
-/* a horrible and inefficient hack to get string section size out of BTF */
-strings_t strings__size(const struct strings *strs)
+int strings__cmp(const struct strings *strs, strings_t a, strings_t b)
 {
-	const struct btf_header *p;
-	uint32_t sz;
-
-	p = btf__get_raw_data(strs->btf, &sz);
-	if (!p)
-		return -1;
-
-	return p->str_len;
-}
-
-/* similarly horrible hack to copy out string section out of BTF */
-int strings__copy(const struct strings *strs, void *dst)
-{
-	const struct btf_header *p;
-	uint32_t sz;
-
-	p = btf__get_raw_data(strs->btf, &sz);
-	if (!p)
-		return -1;
-
-	memcpy(dst, (void *)p + p->str_off, p->str_len);
-	return 0;
+	return a == b ? 0 : strcmp(strings__ptr(strs, a),
+				   strings__ptr(strs, b));
 }
