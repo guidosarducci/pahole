@@ -2914,23 +2914,9 @@ out:
 	return 0;
 }
 
-static bool param__is_struct(struct cu *cu, struct tag *tag)
+static inline bool param__is_wide(struct cu *cu, struct tag *tag)
 {
-	struct tag *type = cu__type(cu, tag->type);
-
-	if (!type)
-		return false;
-
-	switch (type->tag) {
-	case DW_TAG_structure_type:
-		return true;
-	case DW_TAG_const_type:
-	case DW_TAG_typedef:
-		/* handle "typedef struct", const parameter */
-		return param__is_struct(cu, type);
-	default:
-		return false;
-	}
+	return tag__size(tag, cu) > cu->addr_size;
 }
 
 static int cu__resolve_func_ret_types_optimized(struct cu *cu)
@@ -2942,9 +2928,9 @@ static int cu__resolve_func_ret_types_optimized(struct cu *cu)
 		struct tag *tag = pt->entries[i];
 		struct parameter *pos;
 		struct function *fn = tag__function(tag);
-		bool has_unexpected_reg = false, has_struct_param = false;
+		bool has_unexpected_reg = false, has_wide_param = false;
 
-		/* mark function as optimized if parameter is, or
+		/* Mark function as optimized if parameter is, or
 		 * if parameter does not have a location; at this
 		 * point location presence has been marked in
 		 * abstract origins for cases where a parameter
@@ -2953,10 +2939,11 @@ static int cu__resolve_func_ret_types_optimized(struct cu *cu)
 		 *
 		 * Also mark functions which, due to optimization,
 		 * use an unexpected register for a parameter.
-		 * Exception is functions which have a struct
-		 * as a parameter, as multiple registers may
-		 * be used to represent it, throwing off register
-		 * to parameter mapping.
+		 * Exception is functions with a wide parameter,
+		 * as single register won't be used to represent
+		 * it, throwing off register to parameter mapping.
+		 * Examples include large structs or 64-bit types
+		 * on a 32-bit arch.
 		 */
 		ftype__for_each_parameter(&fn->proto, pos) {
 			if (pos->optimized || !pos->has_loc)
@@ -2967,11 +2954,11 @@ static int cu__resolve_func_ret_types_optimized(struct cu *cu)
 		}
 		if (has_unexpected_reg) {
 			ftype__for_each_parameter(&fn->proto, pos) {
-				has_struct_param = param__is_struct(cu, &pos->tag);
-				if (has_struct_param)
+				has_wide_param = param__is_wide(cu, &pos->tag);
+				if (has_wide_param)
 					break;
 			}
-			if (!has_struct_param)
+			if (!has_wide_param)
 				fn->proto.unexpected_reg = 1;
 		}
 
